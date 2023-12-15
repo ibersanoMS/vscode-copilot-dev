@@ -1,0 +1,49 @@
+{
+  "name": "test-agent",
+  "displayName": "@test-agent",
+  "description": "test",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.84.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "enabledApiProposals": [
+    "chat",
+    "chatAgents2",
+    "chatVariables",
+    "chatRequestAccess"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": [
+      {
+        "title": "test"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "lint": "eslint src --ext .ts",
+    "update-vscode-dts": "cd src && npx --yes vscode-dts@latest dev -f"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.3",
+    "@types/node": "18.x",
+    "@types/vscode": "^1.84.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.1",
+    "@typescript-eslint/parser": "^6.13.1",
+    "eslint": "^8.52.0",
+    "glob": "^10.3.10",
+    "typescript": "^5.2.2"
+  },
+  "dependencies": {
+    "@octokit/core": "^5.0.2"
+  },
+  "extensionDependencies": [
+    "vscode.git"]
+}
