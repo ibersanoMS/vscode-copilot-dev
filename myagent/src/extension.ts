@@ -64,34 +64,91 @@ export function deactivate() { }
 
 async function handleBranch(request: vscode.ChatAgentRequest, context: vscode.ChatAgentContext, progress: vscode.Progress<vscode.ChatAgentProgress>, token: vscode.CancellationToken) {
 		const access = await vscode.chat.requestChatAccess('copilot');
-		
+		const patternFile = await vscode.workspace.findFiles('**/standards.txt');
+		const openDoc = await vscode.workspace.openTextDocument(patternFile[0]);
+		const text = openDoc.getText().trimEnd();
+		//const text = access2.getText();
 		const gitExtension = vscode.extensions.getExtension<GitExtension>('vscode.git')?.exports;
 
-		const issueNumber = Number(request.prompt);
+		// Input string
+		const inputString: string = text;
 
-		const githubToken = await connectToGitHub();
-		const octokit = new Octokit({
-			auth: githubToken.accessToken
-		  });
+		// Regular expression pattern to match names in curly braces
+		//const pattern: RegExp = /\{([^}]+)\}/g;
+		const pattern: RegExp = /\{([^{}]+)\}/g;
+
+		// Find all matches
+		const matches: string[] = inputString.match(pattern) || [];
+		let userIdValue: string = "";
+		let labelValue: string | undefined = "";
+		let titleValue: string | undefined = "";
+		let descriptionValue: string | undefined = "";
+		let typeValue: string | undefined = "";
+		let numberValue: number = Number(request.prompt)? Number(request.prompt) : -1;
+		let issue: any; 
+		let githubConnectionInfo: any;
+
+		if(vscode.extensions.getExtension('GitHub.vscode-pull-request-github')?.isActive){
+			githubConnectionInfo = await connectToGitHub();
+		}
+
+		if(numberValue !== -1){
+			const octokit = new Octokit({
+				auth: githubConnectionInfo.accessToken
+			});
 		
-		const repo = gitExtension?.getAPI(1).getRepository(gitExtension?.getAPI(1).repositories[0]?.rootUri);
-		const owner = gitExtension?.getAPI(1).repositories[0]?.state?.remotes[0]?.fetchUrl?.split('/')[3];
-		const repoName = gitExtension?.getAPI(1).repositories[0]?.state?.remotes[0]?.fetchUrl?.split('/')[4].split('.')[0];
+			const repo = gitExtension?.getAPI(1).getRepository(gitExtension?.getAPI(1).repositories[0]?.rootUri);
+			const owner = gitExtension?.getAPI(1).repositories[0]?.state?.remotes[0]?.fetchUrl?.split('/')[3];
+			const repoName = gitExtension?.getAPI(1).repositories[0]?.state?.remotes[0]?.fetchUrl?.split('/')[4].split('.')[0];
 
-		const issue = await octokit.request('GET /repos/{owner}/{repo}/issues/{issue_number}', {
-								owner: owner || 'default_owner',
-								repo: repoName || 'default_repo_name',
-								issue_number: issueNumber,
-								headers: {
-									'X-GitHub-Api-Version': '2022-11-28'
-								}
-							});
-		const issueType = (typeof issue.data.labels[0] === 'string') ? issue.data.labels[0] : issue.data.labels[0]?.name;
-		const branchName = issueType + '/' + issueNumber + '-' + issue.data.title.replace(/ /g, '-');
+			issue = await octokit.request('GET /repos/{owner}/{repo}/issues/{issue_number}', {
+									owner: owner || 'default_owner',
+									repo: repoName || 'default_repo_name',
+									issue_number: numberValue,
+									headers: {
+										'X-GitHub-Api-Version': '2022-11-28'
+									}
+								});
+		}
+		
+		matches.forEach(async match => {
+			switch(match.slice(1, -1)){
+				case 'description':
+					descriptionValue = request.prompt.split(' ').slice(1).join(' ');
+					break;
+				case 'type':
+					typeValue = request.prompt.split(' ')[0];
+				case 'userId':
+					userIdValue = githubConnectionInfo.userId;
+					break;
+				case 'label':
+					labelValue = (typeof issue.data.labels[0] === 'string') ? issue.data.labels[0] : issue.data.labels[0]?.name;
+					break;
+				case 'number':
+					if(numberValue === -1)
+					{
+						return "Error: Your standards requires an issue number. Please try again with a valid issue number."
+					}
+					break;
+				case 'title':
+					titleValue = issue.data.title.replace(/ /g, '-');
+					break;
+				default:
+					return "Error: Invalid parameter. Please check the standards.txt file.";
+			}
+		});
+
+		// Replace the matched names with the corresponding values
+		let branchName: string = inputString;
+		matches.forEach(match => {
+			if(`${match.slice(1,-1)}Value` === ''){
+				return `Error: You are missing a value for ${match.slice(1,-1)}. Please try again.`
+			}
+			branchName = branchName.replace(`${match}`, eval(`${match.slice(1,-1)}Value`));
+		});
+
 		await gitExtension?.getAPI(1).repositories[0].createBranch(branchName, true, gitExtension?.getAPI(1).repositories[0]?.state?.HEAD?.commit);
 
-		//const createBranch = await gitExtension?.exports.getAPI(1).repositories[0].createBranch();
-		//console.log(gitExtension?.exports.getAPI(1).repositories[0]?.state?.remotes[0]?.fetchUrl?.split('/')[2]);
 		const promptRequest = access.makeRequest([
 			{ role: vscode.ChatMessageRole.System, content: 'Branching...' },
 		], {}, token);
@@ -108,5 +165,5 @@ async function handleBranch(request: vscode.ChatAgentRequest, context: vscode.Ch
 	const session = await vscode.authentication.getSession("github", ["read:user", "user:email", "repo"], {
 		createIfNone: true
 	});
-	return { accessToken: session.accessToken, sessionId: session.id };
+	return { accessToken: session.accessToken, sessionId: session.id, userId: session.account.label };
 }
