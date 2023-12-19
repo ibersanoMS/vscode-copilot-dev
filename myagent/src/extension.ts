@@ -3,6 +3,7 @@ import { GitExtension } from './git';
 import { Octokit } from "@octokit/core";
 import { WriteStream } from 'fs';
 import { stringify } from 'querystring';
+import { error } from 'console';
 
 // Use this prompt to initiate some context with the model when the user activates this agent
 const prompt = "Git branching";
@@ -63,11 +64,12 @@ export function activate(context: vscode.ExtensionContext) {
 export function deactivate() { }
 
 async function handleBranch(request: vscode.ChatAgentRequest, context: vscode.ChatAgentContext, progress: vscode.Progress<vscode.ChatAgentProgress>, token: vscode.CancellationToken) {
-		const access = await vscode.chat.requestChatAccess('copilot');
+		progress.report({ content: 'Creating branch according to repository standards...\n' });
 		const patternFile = await vscode.workspace.findFiles('**/standards.txt');
 		const openDoc = await vscode.workspace.openTextDocument(patternFile[0]);
 		const text = openDoc.getText().trimEnd();
-		//const text = access2.getText();
+		const supportedFields = ['{userId}', '{label}', '{title}', '{description}', '{type}', '{number}'];
+		const fieldsRequireGitHub = ['{userId}', '{label}', '{title}', '{number}'];
 		const gitExtension = vscode.extensions.getExtension<GitExtension>('vscode.git')?.exports;
 
 		// Input string
@@ -88,33 +90,42 @@ async function handleBranch(request: vscode.ChatAgentRequest, context: vscode.Ch
 		let issue: any; 
 		let githubConnectionInfo: any;
 
-		if(vscode.extensions.getExtension('GitHub.vscode-pull-request-github')?.isActive){
-			githubConnectionInfo = await connectToGitHub();
+		const hasUnallowedTerms: boolean = matches.some(term => !supportedFields.includes(term));
+		if(hasUnallowedTerms){
+			progress.report({content: "Error: You used a term that is not currently supported. The supported terms are: {userId}, {label}, {title}, {description}, {type}, {number}. Please try again."});
 		}
-
-		if(numberValue !== -1){
-			const octokit = new Octokit({
-				auth: githubConnectionInfo.accessToken
-			});
 		
-			const repo = gitExtension?.getAPI(1).getRepository(gitExtension?.getAPI(1).repositories[0]?.rootUri);
-			const owner = gitExtension?.getAPI(1).repositories[0]?.state?.remotes[0]?.fetchUrl?.split('/')[3];
-			const repoName = gitExtension?.getAPI(1).repositories[0]?.state?.remotes[0]?.fetchUrl?.split('/')[4].split('.')[0];
-
-			issue = await octokit.request('GET /repos/{owner}/{repo}/issues/{issue_number}', {
-									owner: owner || 'default_owner',
-									repo: repoName || 'default_repo_name',
-									issue_number: numberValue,
-									headers: {
-										'X-GitHub-Api-Version': '2022-11-28'
-									}
-								});
+		if(matches.some(term => fieldsRequireGitHub.includes(term))){
+			if(vscode.extensions.getExtension('GitHub.vscode-pull-request-github')?.isActive){
+				githubConnectionInfo = await connectToGitHub();
+				if(numberValue !== -1){
+					const octokit = new Octokit({
+						auth: githubConnectionInfo.accessToken
+					});
+				
+					const repo = gitExtension?.getAPI(1).getRepository(gitExtension?.getAPI(1).repositories[0]?.rootUri);
+					const owner = gitExtension?.getAPI(1).repositories[0]?.state?.remotes[0]?.fetchUrl?.split('/')[3];
+					const repoName = gitExtension?.getAPI(1).repositories[0]?.state?.remotes[0]?.fetchUrl?.split('/')[4].split('.')[0];
+		
+					issue = await octokit.request('GET /repos/{owner}/{repo}/issues/{issue_number}', {
+											owner: owner || 'default_owner',
+											repo: repoName || 'default_repo_name',
+											issue_number: numberValue,
+											headers: {
+												'X-GitHub-Api-Version': '2022-11-28'
+											}
+										});
+				}
+			}
+			else {
+				return "Error: You are not connected to GitHub. Please connect to GitHub and try again.";
+			}
 		}
 		
 		matches.forEach(async match => {
 			switch(match.slice(1, -1)){
 				case 'description':
-					descriptionValue = request.prompt.split(' ').slice(1).join(' ');
+					descriptionValue = request.prompt.split(' ').slice(1).join('-');
 					break;
 				case 'type':
 					typeValue = request.prompt.split(' ')[0];
@@ -140,25 +151,32 @@ async function handleBranch(request: vscode.ChatAgentRequest, context: vscode.Ch
 
 		// Replace the matched names with the corresponding values
 		let branchName: string = inputString;
+		let errorMessage: string | null = null;
 		matches.forEach(match => {
-			if(`${match.slice(1,-1)}Value` === ''){
-				return `Error: You are missing a value for ${match.slice(1,-1)}. Please try again.`
+			if(eval(`${match.slice(1,-1)}Value`) === ""){
+				errorMessage = `Error: You are missing a value for ${match.slice(1,-1)}. Please try again.`
 			}
-			branchName = branchName.replace(`${match}`, eval(`${match.slice(1,-1)}Value`));
+			else{
+				branchName = branchName.replace(`${match}`, eval(`${match.slice(1,-1)}Value`));
+			}
 		});
+		
+		const refNamePattern: RegExp = /^(?![^\/]+$)(?:(?!\/{2,})[^\0\\~^:?*\[\]\s][^\0\\~^:?*\[\]]*\/)*[^\0\\~^:?*\[\]\s][^\0\\~^:?*\[\]]*$/;
 
-		await gitExtension?.getAPI(1).repositories[0].createBranch(branchName, true, gitExtension?.getAPI(1).repositories[0]?.state?.HEAD?.commit);
-
-		const promptRequest = access.makeRequest([
-			{ role: vscode.ChatMessageRole.System, content: 'Branching...' },
-		], {}, token);
-		for await (const chunk of promptRequest.response) {
-			if (token.isCancellationRequested) {
-				break;
-			}
-			progress.report({ content: chunk });
+    		// Test if the ref name matches the pattern
+   		 
+		if(errorMessage !== null || !refNamePattern.test(branchName)) {
+			progress.report({ content: errorMessage !== null ? errorMessage : "Error: The branch name is not valid. Please try again." });
+			return;
 		}
-		return "branching function completed";
+		else {
+			
+			await gitExtension?.getAPI(1).repositories[0].createBranch(branchName, true, gitExtension?.getAPI(1).repositories[0]?.state?.HEAD?.commit);
+
+			progress.report({ content: `Branch ${branchName} created` });
+	
+			return "branching function completed";
+		}
 }
 
  async function connectToGitHub() {
